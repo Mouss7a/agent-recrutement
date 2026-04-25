@@ -2,18 +2,25 @@ import os
 import logging
 import requests
 import base64
+import json
 from flask import Flask, request
 from agent import AgentRecrutement
 from voice import transcrire_vocal
 from notify import notifier_moussa
 from sheets import sauvegarder_candidate
+from upstash_redis import Redis
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 agent = AgentRecrutement()
-sessions = {}
+
+# Redis pour persistance sessions
+redis = Redis(
+    url=os.getenv("UPSTASH_REDIS_REST_URL"),
+    token=os.getenv("UPSTASH_REDIS_REST_TOKEN")
+)
 
 FORMATS_NON_SUPPORTES = [
     "application/msword",
@@ -21,6 +28,27 @@ FORMATS_NON_SUPPORTES = [
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 ]
+
+def get_session(phone):
+    try:
+        data = redis.get(f"session:{phone}")
+        if data:
+            return json.loads(data)
+    except:
+        pass
+    return {
+        "historique": [], "etape": "debut", "score": 0,
+        "infos": {}, "suspicion_ia": 0, "vocal_attendu": False,
+        "genre_score": 0, "vocal_refuse_count": 0,
+        "vocal_incompris_count": 0, "dernier_message_vocal": False,
+        "rapport_final": None
+    }
+
+def save_session(phone, session):
+    try:
+        redis.set(f"session:{phone}", json.dumps(session), ex=86400)
+    except Exception as e:
+        logger.error(f"Erreur sauvegarde session: {e}")
 
 @app.route("/webhook", methods=["GET"])
 def verify():
@@ -41,15 +69,7 @@ def webhook():
         phone = message["from"]
         msg_type = message["type"]
 
-        if phone not in sessions:
-            sessions[phone] = {
-                "historique": [], "etape": "debut", "score": 0,
-                "infos": {}, "suspicion_ia": 0, "vocal_attendu": False,
-                "genre_score": 0, "vocal_refuse_count": 0,
-                "vocal_incompris_count": 0, "dernier_message_vocal": False,
-                "rapport_final": None
-            }
-        session = sessions[phone]
+        session = get_session(phone)
 
         if session.get("etape") in ["termine", "rejete"]:
             return "OK", 200
@@ -69,9 +89,11 @@ def webhook():
                 if vocal_incompris == 0:
                     envoyer_message(phone, "Je n'ai pas bien entendu votre vocal. Pouvez-vous le renvoyer en parlant un peu plus clairement ? 🎤")
                     session["vocal_incompris_count"] = 1
+                    save_session(phone, session)
                 else:
                     envoyer_message(phone, "Je n'arrive toujours pas à comprendre. Pouvez-vous écrire votre réponse en texte ? ✍️")
                     session["vocal_incompris_count"] = 0
+                    save_session(phone, session)
                 return "OK", 200
             session["dernier_message_vocal"] = True
             session["vocal_incompris_count"] = 0
@@ -90,7 +112,7 @@ def webhook():
             else:
                 media_id = message["image"]["id"]
                 document_contenu = telecharger_et_analyser_image(media_id, token_wa)
-                texte = "[candidate a envoyé une image/capture d'écran]"
+                texte = "[candidate a envoyé une image]"
         else:
             envoyer_message(phone, "Merci d'envoyer uniquement des messages texte, vocaux, images ou documents PDF. 🙏")
             return "OK", 200
@@ -101,8 +123,9 @@ def webhook():
         reponse, session_maj, alerte, rapport_final = agent.traiter_message(
             texte, session, phone, document_contenu
         )
-        sessions[phone] = session_maj
-        sessions[phone]["dernier_message_vocal"] = False
+
+        session_maj["dernier_message_vocal"] = False
+        save_session(phone, session_maj)
         envoyer_message(phone, reponse)
 
         if alerte and alerte.get("type") == "suspicion_ia":
@@ -179,8 +202,7 @@ def envoyer_rapport_whatsapp(phone, score, infos, suspicion, rapport, session):
 
     except Exception as e:
         logger.error(f"Erreur envoi rapport: {e}")
-        score_session = session.get("score", 0)
-        notifier_moussa(f"✅ CANDIDATE TERMINÉE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n⭐ Score: {score}/100\n🤖 Suspicion: {suspicion}/10")
+        notifier_moussa(f"✅ CANDIDATE TERMINÉE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n⭐ Score: {score}/100")
 
 
 def telecharger_et_analyser_document(media_id, token, mime_type):
@@ -230,7 +252,7 @@ def telecharger_et_analyser_image(media_id, token):
                 "role": "user",
                 "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": content_type, "data": image_data}},
-                    {"type": "text", "text": "Analyse cette image de candidature ou capture d'écran. Extrais en JSON toutes les informations visibles : statistiques, taux de confirmation, chiffres de vente, expérience, compétences, outils utilisés."}
+                    {"type": "text", "text": "Analyse cette image. Extrais en JSON toutes les informations visibles : statistiques, taux de confirmation, chiffres de vente, expérience, compétences, outils utilisés."}
                 ]
             }]
         )
