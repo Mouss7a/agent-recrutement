@@ -81,4 +81,4 @@ def envoyer_message(phone, texte):
         r = requests.post(url, headers=headers, json=payload)
         r.raise_for_status()
     except Exception as e:
-        logger.error(f"Erreur envoi: {e}")se)
+        logger.error(f"Erreur envoi: {e}")
