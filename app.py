@@ -41,7 +41,8 @@ def webhook():
             texte = message["text"]["body"]
         elif msg_type == "audio":
             audio_id = message["audio"]["id"]
-            texte = transcrire_vocal(audio_id)
+            token = os.getenv("WHATSAPP_TOKEN")
+            texte = transcrire_vocal(audio_id, token)
             if not texte:
                 envoyer_message(phone, "Je n'ai pas pu comprendre ton vocal. Tu peux réécrire en texte ?")
                 return "OK", 200
@@ -54,7 +55,7 @@ def webhook():
         sessions[phone] = session_maj
         envoyer_message(phone, reponse)
         if alerte and alerte.get("type") == "suspicion_ia":
-            notifier_moussa(f"⚠️ SUSPICION IA\n📱 {phone}\n🤖 Niveau: {alerte.get('niveau')}/10\n💬 {texte[:200]}")
+            notifier_moussa(f"⚠️ SUSPICION IA\n📱 {phone}\n🔢 Niveau: {alerte.get('niveau')}/10\n💬 {texte[:200]}")
         if session_maj.get("etape") in ["termine", "rejete"]:
             score = session_maj.get("score", 0)
             infos = session_maj.get("infos", {})
@@ -62,9 +63,9 @@ def webhook():
             etape = session_maj.get("etape")
             sauvegarder_candidate(phone, infos, score, suspicion, etape)
             if score >= 85:
-                notifier_moussa(f"🔥 EXCELLENTE CANDIDATE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n📅 {infos.get('age','N/A')} ans\n💼 {infos.get('experience_mois','N/A')} mois\n💰 {infos.get('chiffre','N/A')}\n🏆 Score: {score}/100\n🤖 IA: {suspicion}/10\n✅ CONTACTER EN PRIORITÉ")
+                notifier_moussa(f"🌟 EXCELLENTE CANDIDATE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n🎂 {infos.get('age','N/A')} ans\n⭐ Score: {score}/100\n🤖 IA: {suspicion}")
             elif score >= 70:
-                notifier_moussa(f"👍 BONNE CANDIDATE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n🏆 Score: {score}/100\n🤖 IA: {suspicion}/10")
+                notifier_moussa(f"👍 BONNE CANDIDATE\n📱 {phone}\n👤 {infos.get('nom','N/A')}\n⭐ Score: {score}/100\n🤖 IA: {suspicion}")
     except Exception as e:
         logger.error(f"Erreur: {e}")
     return "OK", 200
@@ -80,8 +81,4 @@ def envoyer_message(phone, texte):
         r = requests.post(url, headers=headers, json=payload)
         r.raise_for_status()
     except Exception as e:
-        logger.error(f"Erreur envoi: {e}")
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+        logger.error(f"Erreur envoi: {e}")se)
